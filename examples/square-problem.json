@@ -1,0 +1,57 @@
+{
+  "format": "tangram-lab",
+  "version": 1,
+  "kind": "problem",
+  "title": "7枚の正方形",
+  "pieces": [
+    {
+      "id": 0,
+      "x": 10,
+      "y": 3.6666666666666665,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 1,
+      "x": 8.666666666666666,
+      "y": 5,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 2,
+      "x": 11.333333333333332,
+      "y": 6.333333333333332,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 3,
+      "x": 11,
+      "y": 5,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 4,
+      "x": 9.5,
+      "y": 6.499999999999999,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 5,
+      "x": 10,
+      "y": 5.666666666666666,
+      "angle": 0,
+      "flipped": false
+    },
+    {
+      "id": 6,
+      "x": 11.666666666666664,
+      "y": 4,
+      "angle": 0,
+      "flipped": false
+    }
+  ]
+}
