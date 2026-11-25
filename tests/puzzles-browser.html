@@ -1,0 +1,185 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>固定問題・復元のブラウザ検証</title><style>body{font:14px system-ui,sans-serif;padding:20px;color:#294337;background:#f6f5ef}li{margin:6px 0}.fail{color:#b42318}iframe{border:1px solid #ccd8c3;width:1280px;height:1000px;max-width:none}button{padding:8px}#summary{font-weight:700}</style></head><body><h1>固定20問・初期配置・復元の統合テスト</h1><p>本番HTMLとモジュールを使用。GAS通信・保存先をテスト用に差し替え、既存の作品やアクセス記録を変更しません。</p><p id="summary">実行中…</p><ol id="results"></ol><iframe id="app" title="テスト用タングラム"></iframe>
+<script type="module">
+import {BUILTIN_PROBLEMS,builtinProblem,newAttempt} from '../puzzles.js';
+import {createPuzzleLayout, pieceBounds} from '../puzzle-layout.js';
+import {customChain} from './layout-cases.js';
+import {initialPieces,polygon,squarePieces,analyze} from '../geometry.js';
+import {regionPath} from '../silhouette.js';
+import {makeDocument} from '../state.js';
+const preview=new URLSearchParams(location.search).has('preview');
+if(preview){const style=document.createElement('style');style.textContent='body{margin:0;padding:0}body>h1,body>p,body>ol{display:none}iframe{position:fixed;inset:0;width:100vw;height:100vh;border:0}';document.head.append(style);}
+const frame=document.querySelector('#app'),calls=[],downloads=[],errors=[];
+window.testStore=new Map();
+window.recordTestAccess=(id,args)=>{calls.push({id,args});return Promise.resolve({type:'opaque'});};
+window.recordTestDownload=(name,href)=>downloads.push({name,blob:fetch(href).then(r=>r.blob())});
+window.recordTestError=error=>errors.push(String(error));
+const original=await(await fetch('../index.html',{cache:'no-store'})).text();
+const html=original.replace('<head>',`<head><base href="../"><script>
+const documentId=crypto.randomUUID();
+window.fetch=(...args)=>parent.recordTestAccess(documentId,args);
+Object.defineProperty(window,'localStorage',{value:{getItem:k=>parent.testStore.get(k)||null,setItem:(k,v)=>parent.testStore.set(k,String(v))},configurable:true});
+HTMLAnchorElement.prototype.click=function(){parent.recordTestDownload(this.download,this.href);};
+const inputClick=HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click=function(){if(this.type!=='file')inputClick.call(this);};
+window.addEventListener('error',e=>parent.recordTestError(e.message));
+window.addEventListener('unhandledrejection',e=>parent.recordTestError(e.reason));
+<\/script>`);
+const loaded=()=>new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));
+const waitFor=async fn=>{const limit=Date.now()+10000;while(!fn()){if(Date.now()>limit)throw Error('timeout');await new Promise(r=>setTimeout(r,20));}};
+let d,passed=0,failed=0;
+const $=s=>d.querySelector(s),click=s=>$(s).click();
+const assert=(value,message)=>{if(!value)throw Error(message);};
+async function test(name,fn){const row=document.createElement('li');try{await fn();passed++;row.textContent='✓ '+name;}catch(e){failed++;row.className='fail';row.textContent='✗ '+name+': '+e.message;}document.querySelector('#results').append(row);}
+const pointString=piece=>polygon(piece).map(v=>`${v.x},${v.y}`).join(' ');
+const positions=()=>Array.from(d.querySelectorAll('#pieces polygon')).map(p=>[Number(p.dataset.id),p.getAttribute('points')]).sort((a,b)=>a[0]-b[0]);
+function assertAllVisible(){
+ const [x,y,w,h]=$('#board').getAttribute('viewBox').split(' ').map(Number);
+ const paths=[$('#target path')?.getAttribute('d')||'',...Array.from(d.querySelectorAll('#pieces polygon')).map(p=>'M'+p.getAttribute('points').replaceAll(' ','L')+'Z')];
+ for(const path of paths)for(const part of path.split('M').filter(Boolean))for(const pair of part.replace('Z','').split('L')){const [px,py]=pair.split(',').map(Number);assert(px>x+.1&&px<x+w-.1&&py>y+.1&&py<y+h-.1,'表示領域からはみ出しています');}
+ const saved=JSON.parse(window.testStore.get('tangram-lab-v1'));
+ if(saved?.problem){const a=pieceBounds(saved.problem.pieces),b=pieceBounds(saved.modes.puzzle.pieces);if($('#undo').disabled)assert(a.maxX<b.minX,'初期の左右配置が不正です');}
+}
+function tapPiece(id){
+ const p=JSON.parse(window.testStore.get('tangram-lab-v1')).modes[Array.from(d.querySelectorAll('[data-mode]')).find(b=>b.getAttribute('aria-pressed')==='true').dataset.mode].pieces.find(p=>p.id===id);
+ const board=$('#board'),w=frame.contentWindow,point=new w.DOMPoint(p.x,p.y).matrixTransform(board.getScreenCTM());
+ board.setPointerCapture=()=>{};board.hasPointerCapture=()=>false;
+ const ev=type=>new w.PointerEvent(type,{bubbles:true,pointerId:72,button:0,clientX:point.x,clientY:point.y});
+ $(`#pieces polygon[data-id="${id}"]`).dispatchEvent(ev('pointerdown'));board.dispatchEvent(ev('pointerup'));
+}
+function choose(number){$('#problem-picker').open=true;click(`[data-problem="${number}"]`);}
+function moveFirst(){const el=$('#pieces polygon');el.focus();el.dispatchEvent(new frame.contentWindow.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));}
+function dragPiece(id,start,end){
+ const board=$('#board'),w=frame.contentWindow,m=board.getScreenCTM();
+ board.setPointerCapture=()=>{};board.hasPointerCapture=()=>false;
+ const p=(v)=>new w.DOMPoint(v.x,v.y).matrixTransform(m),a=p(start),b=p(end);
+ const ev=(type,v)=>new w.PointerEvent(type,{pointerId:71,button:0,clientX:v.x,clientY:v.y,bubbles:true});
+ $(`#pieces polygon[data-id="${id}"]`).dispatchEvent(ev('pointerdown',a));board.dispatchEvent(ev('pointermove',b));board.dispatchEvent(ev('pointerup',b));
+}
+async function reload(){const before=calls.length,ready=loaded();frame.contentWindow.location.reload();await ready;d=frame.contentDocument;assert(calls.length===before+1,'文書再読込のアクセス数');}
+async function fileLoad(doc){click('#load-puzzle');const w=frame.contentWindow,dt=new w.DataTransfer();dt.items.add(new w.File([JSON.stringify(doc)],'problem.json',{type:'application/json'}));$('#file').files=dt.files;$('#file').dispatchEvent(new w.Event('change'));await waitFor(()=>$('#title').value===doc.title);}
+const ready=loaded();frame.srcdoc=html;await ready;d=frame.contentDocument;
+if(!preview){
+await test('初回：自由制作の7枚はコンパクト配置、パズルは第01問',()=>{
+ assert(calls.length===1,'初回記録');assert(JSON.stringify(positions())===JSON.stringify(initialPieces().map(p=>[p.id,pointString(p)])),'初期配置');
+ click('[data-mode="puzzle"]');assert($('#board-title').textContent===builtinProblem(1).title,'初回番号');assert($('#piece-count').textContent==='2','使用枚数');
+});
+for(const q of BUILTIN_PROBLEMS)await test(`${q.title}：番号・必要ピース・シルエット・元の解答・履歴分離`,()=>{
+ choose(q.number);
+ assertAllVisible();const stablePath=$('#target path').getAttribute('d'),stableView=$('#board').getAttribute('viewBox');
+ assert($('#board-title').textContent===q.title,'問題タイトル');assert($('#target path').getAttribute('d')===regionPath(createPuzzleLayout(q).problem.pieces),'シルエット');
+ assert($('#piece-count').textContent===String(q.pieces.length),'使用ピース');
+ assert(d.querySelectorAll('#piece-list input').length===q.pieces.length,'一覧に不要なピースがあります');
+ assert(JSON.stringify(positions())===JSON.stringify(newAttempt(q).pieces.map(p=>[p.id,pointString(p)])),'初期解答');
+ assert($('#undo').disabled&&$('#redo').disabled,'前問の履歴が混在');assert(!$('#message').classList.contains('success'),'前問の正解表示が混在');assert($('#answer-label').hidden,'前問の解答表示');
+ click('#show-answer');assert($('#answer').children.length===q.pieces.length,'解答の枚数');
+ assert(Array.from($('#answer').children).every((el,i)=>el.getAttribute('points')===pointString(createPuzzleLayout(q).problem.pieces[i])),'解答の配置');click('#close-answer');
+ moveFirst();click('#rotate-right');click('#rotate-left');click('#flip');
+ assert($('#target path').getAttribute('d')===stablePath&&$('#board').getAttribute('viewBox')===stableView,'通常操作で問題または倍率が動きました');
+ click('#zoom-in');click('#zoom-fit');assertAllVisible();
+ click('#zoom-in');click('#reset');assertAllVisible();assert($('#target path').getAttribute('d')===stablePath,'初期配置で問題が動きました');
+ click('#retry-problem');assertAllVisible();assert($('#target path').getAttribute('d')===stablePath,'再挑戦で問題が動きました');
+ moveFirst();assert(!$('#undo').disabled,'移動履歴');assert(calls.length===1,'問題切替で追加記録');
+});
+await test('前後移動と自由選択：未クリアでも全問にアクセス可能',()=>{
+ choose(20);assert($('#next-problem').disabled,'末尾');click('#previous-problem');assert($('#board-title').textContent===builtinProblem(19).title,'前');click('#next-problem');assert($('#board-title').textContent===builtinProblem(20).title,'次');
+ choose(1);assert($('#previous-problem').disabled,'先頭');assert(d.querySelectorAll('[data-problem]').length===20,'20問の一覧');
+});
+await test('第01問を実操作で解答し、再挑戦と問題切替で成功・履歴を解除',()=>{
+ choose(1);const q=createPuzzleLayout(builtinProblem(1)).problem,start=newAttempt(q);
+ const a=start.pieces.find(p=>p.id===5),b=start.pieces.find(p=>p.id===6);
+ dragPiece(5,a,q.pieces.find(p=>p.id===5));
+ $(`#pieces polygon[data-id="6"]`).focus();click('#rotate-left');click('#rotate-left');dragPiece(6,b,q.pieces.find(p=>p.id===6));
+ click('#check');assert($('#message').classList.contains('success'),'正解表示');
+ click('#show-answer');click('#retry-problem');
+ assert(!$('#message').classList.contains('success')&&$('#undo').disabled&&$('#redo').disabled&&$('#answer-label').hidden,'再挑戦の初期化');
+ assert(JSON.stringify(positions())===JSON.stringify(start.pieces.map(p=>[p.id,pointString(p)])),'再挑戦の配置');
+ moveFirst();choose(2);assert($('#undo').disabled&&$('#redo').disabled,'切替履歴');
+});
+await test('自作モード：未読込状態と問題JSONの読込、固定との切替',async()=>{
+ click('[data-puzzle-source="custom"]');assert($('#piece-count').textContent==='0'&&$('#check').disabled,'未読込状態');
+ await fileLoad(makeDocument('自作問題の読込試験',squarePieces(),'problem'));
+ assert($('#puzzle-library').hidden===false&&$('#builtin-controls').hidden,'読込後のモード');
+ assert($('#target path').getAttribute('d')===regionPath(createPuzzleLayout(makeDocument('自作',squarePieces(),'problem')).problem.pieces),'自作シルエット');
+ click('[data-puzzle-source="builtin"]');choose(20);click('[data-puzzle-source="custom"]');assert($('#board-title').textContent==='自作問題の読込試験','自作問題を保持');
+});
+await test('自動保存：自作問題の解答途中を実再読込で復元',async()=>{
+ moveFirst();const before=JSON.stringify(positions());await reload();assert($('#board-title').textContent==='自作問題の読込試験','自作タイトル');assert(JSON.stringify(positions())===before,'解答途中の座標');assert($('#undo').disabled&&$('#redo').disabled,'再読込履歴');
+});
+await test('自動保存：固定20問目の番号と解答途中を実再読込で復元',async()=>{
+ click('[data-puzzle-source="builtin"]');choose(20);moveFirst();const before=JSON.stringify(positions());await reload();assert($('#board-title').textContent===builtinProblem(20).title,'固定番号');assert(JSON.stringify(positions())===before,'固定解答途中');click('[data-puzzle-source="custom"]');assert($('#board-title').textContent==='自作問題の読込試験','固定利用後も自作を保持');
+});
+await test('旧版の自動保存を移行：自作問題と解答を失わない',async()=>{
+ const custom=makeDocument('旧版からの自作問題',squarePieces(),'problem'),attempt={title:custom.title,pieces:initialPieces()};attempt.pieces[0].y+=.2;
+ window.testStore.set('tangram-lab-v1',JSON.stringify({mode:'puzzle',problem:custom,modes:{create:{title:'旧制作',pieces:initialPieces()},square:{title:'旧正方形',pieces:initialPieces()},puzzle:attempt}}));
+ await reload();assert($('#board-title').textContent===custom.title,'旧自作タイトル');assert($('#custom-controls').hidden===false,'旧自作モード');const fixed=createPuzzleLayout(custom).problem,dx=fixed.pieces[0].x-custom.pieces[0].x,dy=fixed.pieces[0].y-custom.pieces[0].y;assert(JSON.stringify(positions())===JSON.stringify(attempt.pieces.map(p=>[p.id,pointString({...p,x:p.x+dx,y:p.y+dy})])),'旧解答の相対座標');
+});
+await test('3モードすべての初期配置ボタンが新しい間隔を使用',()=>{
+ for(const mode of ['create','square','puzzle']){click(`[data-mode="${mode}"]`);moveFirst();click('#reset');const current=positions(),expected=(mode==='puzzle'?newAttempt(JSON.parse(window.testStore.get('tangram-lab-v1')).problem).pieces:initialPieces().filter(p=>current.some(([id])=>id===p.id))).map(p=>[p.id,pointString(p)]);assert(JSON.stringify(current)===JSON.stringify(expected),mode+'の再配置');}
+});
+await test('固定問題のJSON・PNG保存と自作としての再読込',async()=>{
+ click('[data-puzzle-source="builtin"]');choose(16);const before=downloads.length;click('#save');const data=JSON.parse(await(await downloads.at(-1).blob).text());assert(data.title===builtinProblem(16).title&&data.kind==='problem','固定JSON');assert(JSON.stringify(data.pieces)===JSON.stringify(createPuzzleLayout(builtinProblem(16)).problem.pieces),'固定解答保存');
+ click('#png-silhouette');click('#png-answer');await waitFor(()=>downloads.length===before+3);
+ for(const entry of downloads.slice(before+1)){const blob=await entry.blob,bytes=new Uint8Array(await blob.slice(0,8).arrayBuffer());assert(blob.type==='image/png'&&bytes[0]===137&&bytes[1]===80,'固定PNG');}
+ click('[data-puzzle-source="custom"]');await fileLoad(data);assert($('#board-title').textContent===data.title,'固定JSONの再読込');
+});
+await test('固定ツールバー：3モードで未選択は無効、選択・変形で作業領域が移動しない',()=>{
+ for(const mode of ['create','square','puzzle']){
+   click(`[data-mode="${mode}"]`);click('#reset');
+   const tools=$('#piece-tools'),board=$('#board'),before=board.getBoundingClientRect(),view=board.getAttribute('viewBox');
+   assert(!tools.hidden&&!tools.closest('#board-wrap'),'ツールバーが作業台内にあります');
+   assert($('#rotate-left').disabled&&$('#rotate-right').disabled&&$('#flip').disabled,'未選択のボタン');
+   const ids=JSON.parse(window.testStore.get('tangram-lab-v1')).modes[mode].pieces.map(p=>p.id),id=mode==='puzzle'?ids[0]:4;
+   tapPiece(id);assert(!$('#rotate-left').disabled&&!$('#flip').disabled,'選択後のボタン');
+   click('#rotate-left');click('#rotate-right');click('#flip');
+   assert(Number($('#pieces .selected').dataset.id)===id,'変形で選択解除');
+   const after=board.getBoundingClientRect();assert(before.top===after.top&&before.width===after.width&&before.height===after.height,'選択で作業領域が変化');
+   assert(tools.getBoundingClientRect().bottom<=after.top+1,'ツールバーがピースを覆います');
+   assert(board.getAttribute('viewBox')===view,'変形でカメラが変化');
+ }
+});
+await test('密集した7枚を直接選択でき、変形後も選択維持・内部重複なし',()=>{
+ click('[data-mode="create"]');click('#example');
+ for(const id of [3,5,6,4,1,0,2]){
+   const p=JSON.parse(window.testStore.get('tangram-lab-v1')).modes.create.pieces.find(p=>p.id===id),point=new frame.contentWindow.DOMPoint(p.x,p.y).matrixTransform($('#board').getScreenCTM());
+   assert(Number(d.elementFromPoint(point.x,point.y)?.closest('[data-id]')?.dataset.id)===id,'別の要素がピースへのタップを遮ります');
+   tapPiece(id);assert(Number($('#pieces .selected').dataset.id)===id,'直接選択');
+   click('#rotate-left');click('#flip');assert(Number($('#pieces .selected').dataset.id)===id,'密集時の選択維持');
+   assert(analyze(JSON.parse(window.testStore.get('tangram-lab-v1')).modes.create.pieces).overlaps.length===0,'変形で重なりました');
+ }
+});
+await test('余白の通常ドラッグは表示を動かさず、表示移動オンのときだけ動く',()=>{
+ click('[data-mode="puzzle"]');click('#reset');
+ const board=$('#board'),w=frame.contentWindow,b=board.getBoundingClientRect(),path=$('#target path').getAttribute('d'),view=board.getAttribute('viewBox');
+ board.setPointerCapture=()=>{};board.hasPointerCapture=()=>false;
+ const ev=(type,dx,dy)=>new w.PointerEvent(type,{bubbles:true,pointerId:81,button:0,clientX:b.left+20+dx,clientY:b.top+20+dy});
+ const gesture=()=>{board.dispatchEvent(ev('pointerdown',0,0));board.dispatchEvent(ev('pointermove',50,25));board.dispatchEvent(ev('pointerup',50,25));};
+ gesture();assert(board.getAttribute('viewBox')===view,'意図しないパン');
+ click('#pan-view');gesture();assert(board.getAttribute('viewBox')!==view,'意図したパンができません');
+ assert($('#target path').getAttribute('d')===path,'表示移動で問題の座標を変更');
+ click('#pan-view');click('#zoom-fit');assertAllVisible();
+});
+await test('横長の自作問題：左問題・右トレイ・全体表示・途中保存の再復元',async()=>{
+ click('[data-puzzle-source="custom"]');const custom=customChain([0,1,2,3,4,5,6],[0,90,45,0,0,0,90],'x');custom.title='横長の読込試験';
+ await fileLoad(custom);assertAllVisible();
+ assert(Number($('#workspace-boundary').getAttribute('width'))>20,'横長用の操作余白');
+ moveFirst();const before=JSON.stringify(positions()),path=$('#target path').getAttribute('d');await reload();
+ assert(JSON.stringify(positions())===before&&$('#target path').getAttribute('d')===path,'再復元で問題または解答が移動');assertAllVisible();
+});
+await test('縦長の自作問題：上下と全使用ピースを収め、再挑戦でも安定',async()=>{
+ const custom=customChain([0,1,5,6],[90,0,90,0],'y');custom.title='縦長の読込試験';await fileLoad(custom);assertAllVisible();
+ const path=$('#target path').getAttribute('d');click('#zoom-in');click('#retry-custom');assertAllVisible();assert($('#target path').getAttribute('d')===path,'縦長の再挑戦で座標が移動');
+});
+for(const width of [1440,1024,768])await test(`${width}px：コンパクトな選択UIと作業領域、番号リストの表示`,async()=>{
+ frame.style.width=width+'px';await new Promise(resolve=>frame.contentWindow.requestAnimationFrame(()=>frame.contentWindow.requestAnimationFrame(resolve)));
+ click('[data-puzzle-source="builtin"]');$('#problem-picker').open=false;
+ const w=frame.contentWindow,panel=$('#puzzle-library').getBoundingClientRect();
+ assert(d.documentElement.scrollWidth<=w.innerWidth+1,'横スクロール');assert(panel.height<=145,'閉じた選択UIが大きすぎます');
+ $('#problem-picker').open=true;const list=$('#problem-list').getBoundingClientRect();assert(list.right<=w.innerWidth+1&&list.left>=0,'番号一覧が画面外');assert(!Array.from(d.querySelectorAll('[data-problem]')).some(el=>el.disabled),'未クリア制限');$('#problem-picker').open=false;
+});
+await test('問題切替・再挑戦・全操作でGAS追加送信なし、再読込のみ記録、未処理エラーなし',()=>{
+ assert(calls.length===5,'アクセス総数（初回+実再読込4回）');assert(calls.every(c=>new URL(c.args[0]).searchParams.get('app')==='tangram'),'app');assert(errors.length===0,errors.join('; '));
+});
+document.querySelector('#summary').textContent=`${passed} / ${passed+failed} 件成功、失敗 ${failed} 件。GAS送信はモック。`;
+document.title=`${passed}/${passed+failed} 成功 | 固定問題テスト`;
+}
+</script></body></html>

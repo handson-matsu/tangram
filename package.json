@@ -4,7 +4,7 @@
   "type": "module",
   "engines": {"node": ">=20"},
   "scripts": {
-    "test": "node --test tests/geometry.test.js tests/access-counter.test.js",
+    "test": "node --test tests/geometry.test.js tests/access-counter.test.js tests/puzzles.test.js tests/layout.test.js",
     "start": "python3 -m http.server 8000"
   }
 }

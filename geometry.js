@@ -48,5 +48,5 @@ export function snapCandidates(piece, others, target = [], radius = .18) {
   return deltas.sort((a, b) => Number(b.vertex) - Number(a.vertex) || a.d - b.d)
     .map(d => ({ ...piece, x: piece.x + d.dx, y: piece.y + d.dy }));
 }
-export const initialPieces=()=>DEFINITIONS.map((d,i)=>({id:i,x:[3,8,12,16,3,8,13][i],y:i<4?3:8,angle:0,flipped:false}));
+export const initialPieces=()=>DEFINITIONS.map((d,i)=>({id:i,x:[3,41/6,61/6,13,3,27/4,121/12][i],y:i<4?3:7,angle:0,flipped:false}));
 export const squarePieces=()=>DEFINITIONS.map(d=>({id:d.id,x:d.center.x+8,y:d.center.y+3,angle:0,flipped:false}));
